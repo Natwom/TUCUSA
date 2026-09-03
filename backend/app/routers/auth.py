@@ -1,35 +1,17 @@
-import os
-import shutil
-from pathlib import Path
-from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException, status, Form, UploadFile, File
 from pydantic import EmailStr
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
 from app.core.security import hash_password, verify_password, create_access_token
+from app.core.cloudinary_config import upload_image, delete_image
 from datetime import timedelta
 from app.core.config import settings
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
-# ID upload directories
-NATIONAL_ID_DIR = Path("uploads/ids/national")
-STUDENT_ID_DIR = Path("uploads/ids/student")
-NATIONAL_ID_DIR.mkdir(parents=True, exist_ok=True)
-STUDENT_ID_DIR.mkdir(parents=True, exist_ok=True)
-
 VALID_IMAGE_TYPES = {"image/jpeg", "image/png", "image/jpg", "image/webp"}
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
-
-
-def save_id_file(upload_file: UploadFile, save_dir: Path) -> str:
-    file_ext = os.path.splitext(upload_file.filename)[1]
-    file_name = f"{uuid4()}{file_ext}"
-    file_path = save_dir / file_name
-    with file_path.open("wb") as buffer:
-        shutil.copyfileobj(upload_file.file, buffer)
-    return f"/uploads/ids/{save_dir.name}/{file_name}"
 
 
 @router.post("/register", response_model=schemas.UserOut)
@@ -56,16 +38,15 @@ def register(
     for file, label in [(national_id, "National ID"), (student_id, "Student ID")]:
         if file.content_type not in VALID_IMAGE_TYPES:
             raise HTTPException(status_code=400, detail=f"{label} must be an image (JPEG, PNG, WEBP)")
-        # Size check (approximate via reading)
-        file.file.seek(0, os.SEEK_END)
+        file.file.seek(0, 2)  # SEEK_END
         size = file.file.tell()
         file.file.seek(0)
         if size > MAX_FILE_SIZE:
             raise HTTPException(status_code=400, detail=f"{label} must be less than 5MB")
 
-    # Save files
-    national_id_path = save_id_file(national_id, NATIONAL_ID_DIR)
-    student_id_path = save_id_file(student_id, STUDENT_ID_DIR)
+    # Upload to Cloudinary instead of local disk
+    national_id_url = upload_image(national_id.file, folder="tucusa/ids/national")
+    student_id_url = upload_image(student_id.file, folder="tucusa/ids/student")
 
     user = models.User(
         email=email,
@@ -76,8 +57,8 @@ def register(
         year_of_study=year_of_study,
         constituency=constituency,
         phone=phone,
-        national_id_photo=national_id_path,
-        student_id_photo=student_id_path,
+        national_id_photo=national_id_url,
+        student_id_photo=student_id_url,
     )
     db.add(user)
     db.commit()
