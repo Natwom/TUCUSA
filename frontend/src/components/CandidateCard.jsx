@@ -1,9 +1,11 @@
 import { User } from 'lucide-react';
 
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
 const getImageUrl = (photoUrl) => {
   if (!photoUrl) return '/default-avatar.png';
   if (photoUrl.startsWith('http')) return photoUrl;
-  return `http://localhost:8000${photoUrl}`;
+  return `${API_BASE}${photoUrl}`;
 };
 
 export default function CandidateCard({ candidate, selected, onSelect }) {

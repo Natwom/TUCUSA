@@ -1,6 +1,5 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 import os
 
@@ -10,23 +9,18 @@ from app.routers import auth, students, elections, candidates, votes, announceme
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create tables on startup (good for quick deploys)
-    # For production, switch to Alembic migrations later
     Base.metadata.create_all(bind=engine)
     yield
 
 
 app = FastAPI(
-    title="TUCUSA VOTE API", 
+    title="TUCUSA VOTE API",
     version="1.0.0",
     lifespan=lifespan
 )
 
-# ── CORS ──
-# Start with localhost dev origins
 origins = ["http://localhost:5173", "http://localhost:5174"]
 
-# Add Render frontend URLs from env vars if present
 frontend_url = os.getenv("FRONTEND_URL")
 admin_url = os.getenv("ADMIN_URL")
 if frontend_url:
@@ -42,10 +36,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Static Files ──
-app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-
-# ── Routers ──
 app.include_router(auth.router)
 app.include_router(students.router)
 app.include_router(elections.router)
