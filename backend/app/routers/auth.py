@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app import models, schemas
 from app.core.security import hash_password, verify_password, create_access_token
-from app.core.cloudinary_config import upload_image, delete_image
+from app.core.cloudinary_config import upload_image
 from datetime import timedelta
 from app.core.config import settings
 
@@ -28,23 +28,24 @@ def register(
     student_id: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    # Validate duplicates
+    # Check duplicates
     if db.query(models.User).filter(models.User.email == email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
     if db.query(models.User).filter(models.User.admission_number == admission_number).first():
         raise HTTPException(status_code=400, detail="Admission number already registered")
 
-    # Validate ID files
+    # Validate files
     for file, label in [(national_id, "National ID"), (student_id, "Student ID")]:
         if file.content_type not in VALID_IMAGE_TYPES:
             raise HTTPException(status_code=400, detail=f"{label} must be an image (JPEG, PNG, WEBP)")
-        file.file.seek(0, 2)  # SEEK_END
-        size = file.file.tell()
-        file.file.seek(0)
-        if size > MAX_FILE_SIZE:
+        # Read size by consuming content into memory (more reliable than seek)
+        content = file.file.read()
+        if len(content) > MAX_FILE_SIZE:
             raise HTTPException(status_code=400, detail=f"{label} must be less than 5MB")
+        # Reset file pointer for Cloudinary
+        file.file.seek(0)
 
-    # Upload to Cloudinary instead of local disk
+    # Upload to Cloudinary
     national_id_url = upload_image(national_id.file, folder="tucusa/ids/national")
     student_id_url = upload_image(student_id.file, folder="tucusa/ids/student")
 
