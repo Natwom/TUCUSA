@@ -4,17 +4,9 @@ from datetime import datetime, timezone
 from app.database import get_db
 from app import models, schemas
 from app.auth import get_current_active_user
+from app.core.time_utils import ensure_utc, sync_election_status
 
 router = APIRouter(prefix="/api/votes", tags=["Votes"])
-
-
-def ensure_utc(dt: datetime) -> datetime:
-    """Normalize a datetime to UTC-aware. Handles naive datetimes from SQLite."""
-    if dt is None:
-        return dt
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
 
 
 @router.post("/", response_model=schemas.VoteOut)
@@ -36,16 +28,41 @@ def cast_vote(
     start = ensure_utc(election.start_time)
     end = ensure_utc(election.end_time)
 
-    if now < start or now > end:
+    # IMPORTANT FIX: refresh the status column from the actual admin-set
+    # start_time/end_time BEFORE checking it. Previously this endpoint relied
+    # on a `status` column that was only ever refreshed by GET /elections/ or
+    # GET /elections/{id}. If neither of those had been called since the
+    # election's start_time passed, `status` was still "upcoming" here even
+    # though the current time was inside the window the admin configured —
+    # which is exactly the "Voting is not open" bug with a valid time window.
+    if sync_election_status(election, now=now):
+        db.commit()
+        db.refresh(election)
+        start = ensure_utc(election.start_time)
+        end = ensure_utc(election.end_time)
+
+    if now < start:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Voting is not open for this election. "
-                f"Current (UTC): {now.isoformat()}, "
-                f"Window (UTC): {start.isoformat()} to {end.isoformat()}"
-            )
+                f"Voting has not started yet for this election. "
+                f"It opens at {start.isoformat()} (UTC). Current time: {now.isoformat()} (UTC)."
+            ),
         )
 
+    if now >= end:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Voting has closed for this election. "
+                f"It ended at {end.isoformat()} (UTC). Current time: {now.isoformat()} (UTC)."
+            ),
+        )
+
+    # At this point the time window says voting SHOULD be open. Only block on
+    # status if an admin has explicitly force-closed it (stop_election pulls
+    # end_time back to "now", so that case is already covered by the check
+    # above too). This check is now just a safety net, not the primary gate.
     if election.status != "active":
         raise HTTPException(status_code=400, detail="Election is not active")
 
@@ -57,14 +74,19 @@ def cast_vote(
     if existing:
         raise HTTPException(status_code=400, detail="You have already voted in this election")
 
+    candidate = db.query(models.Candidate).filter(
+        models.Candidate.id == data.candidate_id,
+        models.Candidate.election_id == data.election_id,
+    ).first()
+    if not candidate:
+        raise HTTPException(status_code=404, detail="Candidate not found for this election")
+
     vote = models.Vote(
         election_id=data.election_id,
         candidate_id=data.candidate_id,
         user_id=current_user.id,
     )
-    candidate = db.query(models.Candidate).filter(models.Candidate.id == data.candidate_id).first()
-    if candidate:
-        candidate.votes_count += 1
+    candidate.votes_count += 1
 
     db.add(vote)
     db.commit()
