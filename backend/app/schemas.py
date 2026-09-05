@@ -1,6 +1,13 @@
-from pydantic import BaseModel, EmailStr
-from datetime import datetime
+from pydantic import BaseModel, EmailStr, field_validator
+from datetime import datetime, timezone
 from typing import Optional, List
+
+
+def _ensure_utc(v):
+    """Helper: naive datetimes from SQLite are treated as UTC."""
+    if isinstance(v, datetime) and v.tzinfo is None:
+        return v.replace(tzinfo=timezone.utc)
+    return v
 
 
 # --- Auth ---
@@ -40,14 +47,19 @@ class UserOut(BaseModel):
     year_of_study: int
     constituency: str
     phone: str
-    national_id_photo: Optional[str] = None      # <-- ADDED
-    student_id_photo: Optional[str] = None       # <-- ADDED
+    national_id_photo: Optional[str] = None
+    student_id_photo: Optional[str] = None
     profile_picture: Optional[str] = None
     role: str
     is_active: bool
     is_approved: bool
     unique_voter_id: Optional[str] = None
     created_at: datetime
+
+    @field_validator('created_at', mode='before')
+    @classmethod
+    def normalize_created_at(cls, v):
+        return _ensure_utc(v)
 
     class Config:
         from_attributes = True
@@ -69,8 +81,8 @@ class VoterCardOut(BaseModel):
     course: str
     year_of_study: int
     constituency: str
-    national_id_photo: Optional[str] = None      # <-- ADDED
-    student_id_photo: Optional[str] = None       # <-- ADDED
+    national_id_photo: Optional[str] = None
+    student_id_photo: Optional[str] = None
     profile_picture: Optional[str] = None
 
 
@@ -101,6 +113,11 @@ class ElectionOut(BaseModel):
     end_time: datetime
     status: str
     created_at: datetime
+
+    @field_validator('start_time', 'end_time', 'created_at', mode='before')
+    @classmethod
+    def normalize_election_datetimes(cls, v):
+        return _ensure_utc(v)
 
     class Config:
         from_attributes = True
@@ -138,6 +155,11 @@ class VoteOut(BaseModel):
     candidate_id: int
     voted_at: datetime
 
+    @field_validator('voted_at', mode='before')
+    @classmethod
+    def normalize_voted_at(cls, v):
+        return _ensure_utc(v)
+
     class Config:
         from_attributes = True
 
@@ -169,6 +191,11 @@ class AnnouncementOut(BaseModel):
     title: str
     content: str
     created_at: datetime
+
+    @field_validator('created_at', mode='before')
+    @classmethod
+    def normalize_announcement_datetime(cls, v):
+        return _ensure_utc(v)
 
     class Config:
         from_attributes = True

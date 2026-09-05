@@ -10,6 +10,8 @@ router = APIRouter(prefix="/api/elections", tags=["Elections"])
 
 def ensure_utc(dt: datetime) -> datetime:
     """Normalize a datetime to UTC-aware. Handles naive datetimes from SQLite."""
+    if dt is None:
+        return dt
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
@@ -74,6 +76,22 @@ def get_election(election_id: int, db: Session = Depends(get_db)):
     election = db.query(models.Election).filter(models.Election.id == election_id).first()
     if not election:
         raise HTTPException(status_code=404, detail="Election not found")
+
+    # Auto-update status based on current time (same logic as list_elections)
+    now = datetime.now(timezone.utc)
+    start = ensure_utc(election.start_time)
+    end = ensure_utc(election.end_time)
+    updated = False
+    if election.status == "upcoming" and start <= now:
+        election.status = "active"
+        updated = True
+    if election.status == "active" and end <= now:
+        election.status = "closed"
+        updated = True
+    if updated:
+        db.commit()
+        db.refresh(election)
+
     return election
 
 

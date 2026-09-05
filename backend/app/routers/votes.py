@@ -10,6 +10,8 @@ router = APIRouter(prefix="/api/votes", tags=["Votes"])
 
 def ensure_utc(dt: datetime) -> datetime:
     """Normalize a datetime to UTC-aware. Handles naive datetimes from SQLite."""
+    if dt is None:
+        return dt
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
@@ -33,8 +35,17 @@ def cast_vote(
     now = datetime.now(timezone.utc)
     start = ensure_utc(election.start_time)
     end = ensure_utc(election.end_time)
+
     if now < start or now > end:
-        raise HTTPException(status_code=400, detail="Voting is not open for this election")
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Voting is not open for this election. "
+                f"Current (UTC): {now.isoformat()}, "
+                f"Window (UTC): {start.isoformat()} to {end.isoformat()}"
+            )
+        )
+
     if election.status != "active":
         raise HTTPException(status_code=400, detail="Election is not active")
 
