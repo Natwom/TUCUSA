@@ -194,7 +194,7 @@ export default function RegisterPage() {
                 <label className={labelClass}>Full Name</label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input name="full_name" required placeholder="John Doe" value={form.full_name} onChange={handleChange} className={inputClass} />
+                  <input name="full_name" required placeholder="Daniel Natwom" value={form.full_name} onChange={handleChange} className={inputClass} />
                 </div>
               </div>
               <div>
