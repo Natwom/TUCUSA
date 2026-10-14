@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from app.database import get_db
 from app import models, schemas
 from app.auth import get_current_active_user, require_admin
+from app.core.security_events import log_event
 from app.core.time_utils import ensure_utc, sync_election_status
 
 router = APIRouter(prefix="/api/elections", tags=["Elections"])
@@ -11,6 +12,7 @@ router = APIRouter(prefix="/api/elections", tags=["Elections"])
 
 @router.post("/", response_model=schemas.ElectionOut)
 def create_election(
+    request: Request,
     data: schemas.ElectionCreate,
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_admin),
@@ -28,9 +30,6 @@ def create_election(
         end_time=end,
         created_by=admin.id,
     )
-    # Set the correct initial status immediately, based on the times just given,
-    # instead of always defaulting to "upcoming" and waiting for a later request
-    # to fix it.
     election.status = "upcoming"
     db.add(election)
     db.commit()
@@ -40,6 +39,8 @@ def create_election(
         db.commit()
         db.refresh(election)
 
+    log_event("election_created", "info", request, email=admin.email, user_id=admin.id,
+              detail=f"election id={election.id} '{election.title}'")
     return election
 
 
@@ -63,13 +64,6 @@ def active_elections(db: Session = Depends(get_db)):
     result = []
     changed = False
     for e in all_elections:
-        # IMPORTANT: sync status here too. Previously this endpoint only
-        # trusted the stored `status` column, which could still say
-        # "upcoming" even after start_time had passed if nothing else had
-        # refreshed it yet. That mismatch is what caused elections that were
-        # clearly within their time window to be excluded here (or, on the
-        # flip side, to pass this endpoint but still fail the status check
-        # inside cast_vote).
         if sync_election_status(e, now=now):
             changed = True
         if e.status == "active":
@@ -95,6 +89,7 @@ def get_election(election_id: int, db: Session = Depends(get_db)):
 @router.put("/{election_id}", response_model=schemas.ElectionOut)
 def update_election(
     election_id: int,
+    request: Request,
     data: schemas.ElectionUpdate,
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_admin),
@@ -108,45 +103,44 @@ def update_election(
             value = ensure_utc(value)
         setattr(election, field, value)
 
-    # If the admin changed start_time/end_time (and did not explicitly set a
-    # status in the same request), immediately recompute status so the UI and
-    # cast_vote() agree with the new schedule right away.
     if "status" not in update_data:
         sync_election_status(election)
 
     db.commit()
     db.refresh(election)
+    log_event("election_updated", "warning" if {"start_time", "end_time", "status"} & set(update_data) else "info",
+              request, email=admin.email, user_id=admin.id,
+              detail=f"election id={election_id} fields changed: {', '.join(update_data.keys())}")
     return election
 
 
 @router.delete("/{election_id}")
 def delete_election(
     election_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_admin),
 ):
     election = db.query(models.Election).filter(models.Election.id == election_id).first()
     if not election:
         raise HTTPException(status_code=404, detail="Election not found")
+    title = election.title
+    vote_count = db.query(models.Vote).filter(models.Vote.election_id == election_id).count()
     db.delete(election)
     db.commit()
+    log_event("election_deleted", "critical", request, email=admin.email, user_id=admin.id,
+              detail=f"election id={election_id} '{title}' deleted (had {vote_count} vote(s))")
     return {"message": "Election deleted"}
 
 
 @router.post("/{election_id}/start")
 def start_election(
     election_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_admin),
 ):
-    """
-    Manual override: force an election active right now, regardless of its
-    scheduled start_time. NOTE: because status is normally re-derived from
-    start_time/end_time on every read (see sync_election_status), this manual
-    override will be re-evaluated the next time the election is fetched. If
-    you want a manual start to "stick" even before start_time, also pull
-    start_time back to now here.
-    """
+    """Manual override: force an election active right now."""
     election = db.query(models.Election).filter(models.Election.id == election_id).first()
     if not election:
         raise HTTPException(status_code=404, detail="Election not found")
@@ -156,21 +150,19 @@ def start_election(
         election.start_time = now
     election.status = "active"
     db.commit()
+    log_event("election_started", "info", request, email=admin.email, user_id=admin.id,
+              detail=f"election id={election_id} started manually")
     return {"message": "Election started"}
 
 
 @router.post("/{election_id}/stop")
 def stop_election(
     election_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     admin: models.User = Depends(require_admin),
 ):
-    """
-    Manual override: force an election closed right now, regardless of its
-    scheduled end_time. We also pull end_time back to now so that
-    sync_election_status() (used elsewhere) agrees with this and doesn't flip
-    it back to "active" on a later read.
-    """
+    """Manual override: force an election closed right now."""
     election = db.query(models.Election).filter(models.Election.id == election_id).first()
     if not election:
         raise HTTPException(status_code=404, detail="Election not found")
@@ -180,4 +172,6 @@ def stop_election(
         election.end_time = now
     election.status = "closed"
     db.commit()
+    log_event("election_stopped", "warning", request, email=admin.email, user_id=admin.id,
+              detail=f"election id={election_id} stopped manually")
     return {"message": "Election stopped"}

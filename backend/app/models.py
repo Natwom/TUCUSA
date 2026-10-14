@@ -21,8 +21,8 @@ class User(Base):
     year_of_study = Column(Integer, nullable=False)
     phone = Column(String, nullable=False)
     constituency = Column(String, nullable=False)
-    national_id_photo = Column(String, default=None)      # <-- ADDED
-    student_id_photo = Column(String, default=None)       # <-- ADDED
+    national_id_photo = Column(String, default=None)
+    student_id_photo = Column(String, default=None)
     profile_picture = Column(String, default=None)
     role = Column(String, default="student")
     is_active = Column(Boolean, default=True)
@@ -85,3 +85,20 @@ class Announcement(Base):
     content = Column(Text, nullable=False)
     created_by = Column(Integer, ForeignKey("users.id"))
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class SecurityEvent(Base):
+    """Audit + security log. Created automatically by Base.metadata.create_all."""
+    __tablename__ = "security_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_type = Column(String, index=True, nullable=False)
+    severity = Column(String, index=True, default="warning")  # info | warning | critical
+    ip = Column(String, index=True)
+    user_agent = Column(String)
+    path = Column(String)
+    method = Column(String)
+    email = Column(String, index=True)
+    user_id = Column(Integer)
+    detail = Column(Text)
+    created_at = Column(DateTime(timezone=True), index=True, default=lambda: datetime.now(timezone.utc))

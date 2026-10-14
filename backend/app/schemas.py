@@ -1,6 +1,8 @@
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from datetime import datetime, timezone
-from typing import Optional, List
+from typing import Optional, List, Literal
+
+PHONE_PATTERN = r"^\+?[0-9][0-9\s\-]{7,17}$"
 
 
 def _ensure_utc(v):
@@ -23,19 +25,19 @@ class TokenData(BaseModel):
 
 # --- User / Student ---
 class UserRegister(BaseModel):
-    full_name: str
-    admission_number: str
-    course: str
-    year_of_study: int
-    constituency: str
+    full_name: str = Field(min_length=2, max_length=100)
+    admission_number: str = Field(min_length=3, max_length=50)
+    course: str = Field(min_length=2, max_length=100)
+    year_of_study: int = Field(ge=1, le=8)
+    constituency: str = Field(min_length=1, max_length=100)
     email: EmailStr
-    phone: str
-    password: str
+    phone: str = Field(pattern=PHONE_PATTERN)
+    password: str = Field(min_length=8, max_length=72)
 
 
 class UserLogin(BaseModel):
     email: EmailStr
-    password: str
+    password: str = Field(min_length=1, max_length=128)
 
 
 class UserOut(BaseModel):
@@ -66,12 +68,19 @@ class UserOut(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    full_name: Optional[str] = None
-    course: Optional[str] = None
-    year_of_study: Optional[int] = None
-    constituency: Optional[str] = None
-    phone: Optional[str] = None
-    profile_picture: Optional[str] = None
+    full_name: Optional[str] = Field(None, min_length=2, max_length=100)
+    course: Optional[str] = Field(None, min_length=2, max_length=100)
+    year_of_study: Optional[int] = Field(None, ge=1, le=8)
+    constituency: Optional[str] = Field(None, min_length=1, max_length=100)
+    phone: Optional[str] = Field(None, pattern=PHONE_PATTERN)
+    profile_picture: Optional[str] = Field(None, max_length=500)
+
+    @field_validator('profile_picture')
+    @classmethod
+    def https_only(cls, v):
+        if v and not v.lower().startswith("https://"):
+            raise ValueError("Profile picture must be an https URL")
+        return v
 
 
 class VoterCardOut(BaseModel):
@@ -88,20 +97,20 @@ class VoterCardOut(BaseModel):
 
 # --- Election ---
 class ElectionCreate(BaseModel):
-    title: str
-    position: str
-    description: str = ""
+    title: str = Field(min_length=1, max_length=200)
+    position: str = Field(min_length=1, max_length=100)
+    description: str = Field("", max_length=5000)
     start_time: datetime
     end_time: datetime
 
 
 class ElectionUpdate(BaseModel):
-    title: Optional[str] = None
-    position: Optional[str] = None
-    description: Optional[str] = None
+    title: Optional[str] = Field(None, min_length=1, max_length=200)
+    position: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = Field(None, max_length=5000)
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
-    status: Optional[str] = None
+    status: Optional[Literal["upcoming", "active", "closed"]] = None
 
 
 class ElectionOut(BaseModel):
@@ -126,9 +135,9 @@ class ElectionOut(BaseModel):
 # --- Candidate ---
 class CandidateCreate(BaseModel):
     election_id: int
-    name: str
+    name: str = Field(min_length=1, max_length=150)
     photo_url: Optional[str] = None
-    manifesto: str = ""
+    manifesto: str = Field("", max_length=5000)
 
 
 class CandidateOut(BaseModel):
@@ -182,8 +191,8 @@ class ElectionResult(BaseModel):
 
 # --- Announcement ---
 class AnnouncementCreate(BaseModel):
-    title: str
-    content: str
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=5000)
 
 
 class AnnouncementOut(BaseModel):
@@ -207,3 +216,26 @@ class AdminStats(BaseModel):
     total_votes_cast: int
     active_elections: int
     pending_approvals: int
+
+
+# --- Security events ---
+class SecurityEventOut(BaseModel):
+    id: int
+    event_type: str
+    severity: str
+    ip: Optional[str] = None
+    user_agent: Optional[str] = None
+    path: Optional[str] = None
+    method: Optional[str] = None
+    email: Optional[str] = None
+    user_id: Optional[int] = None
+    detail: Optional[str] = None
+    created_at: datetime
+
+    @field_validator('created_at', mode='before')
+    @classmethod
+    def normalize_event_datetime(cls, v):
+        return _ensure_utc(v)
+
+    class Config:
+        from_attributes = True

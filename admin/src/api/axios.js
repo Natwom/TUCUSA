@@ -10,10 +10,16 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
+// Login endpoints legitimately return 401 on a wrong password.
+// Do NOT redirect/reload there, or the error message never reaches the form.
+const AUTH_PATHS = ['/auth/login', '/auth/admin-login'];
+
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    if (err.response?.status === 401) {
+    const url = err.config?.url || '';
+    const isAuthCall = AUTH_PATHS.some((p) => url.includes(p));
+    if (err.response?.status === 401 && !isAuthCall) {
       localStorage.removeItem('admin_token');
       window.location.href = '/login';
     }
