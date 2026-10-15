@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
 import api from '../api/axios';
 import VoterTable from '../components/VoterTable';
-import { Download, FileText, Users, UserCheck, Clock, UserX, MapPin, Loader2 } from 'lucide-react';
+import {
+  Download, FileText, FileSpreadsheet, Users, UserCheck, Clock, UserX, MapPin, Loader2,
+} from 'lucide-react';
+
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 export default function VoterManagement() {
   const [voters, setVoters] = useState([]);
   const [filter, setFilter] = useState('all');
   const [constituency, setConstituency] = useState('all');
   const [downloading, setDownloading] = useState(false);
+  const [downloadingExcel, setDownloadingExcel] = useState(false);
 
   const fetchVoters = () => {
     api.get('/students/').then((res) => setVoters(res.data));
@@ -76,6 +82,25 @@ export default function VoterManagement() {
     URL.revokeObjectURL(url);
   };
 
+  // Shared helper: call a backend export endpoint and save the returned file
+  const downloadFromServer = async (endpoint, mime, extension) => {
+    const params = { status: filter };
+    if (constituency !== 'all') params.constituency = constituency;
+
+    const res = await api.get(endpoint, { params, responseType: 'blob' });
+
+    const slug = constituency === 'all' ? 'all' : constituency.replace(/[^A-Za-z0-9]+/g, '_');
+    const blob = new Blob([res.data], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `tucusa_voters_${slug}_${new Date().toISOString().split('T')[0]}.${extension}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
   const handleDownloadWord = async () => {
     if (filtered.length === 0) {
       alert('There are no voters to download for this selection.');
@@ -83,30 +108,26 @@ export default function VoterManagement() {
     }
     setDownloading(true);
     try {
-      const params = { status: filter };
-      if (constituency !== 'all') params.constituency = constituency;
-
-      const res = await api.get('/admin/voters/export-docx', {
-        params,
-        responseType: 'blob',
-      });
-
-      const slug = constituency === 'all' ? 'all' : constituency.replace(/[^A-Za-z0-9]+/g, '_');
-      const blob = new Blob([res.data], {
-        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `tucusa_voters_${slug}_${new Date().toISOString().split('T')[0]}.docx`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      await downloadFromServer('/admin/voters/export-docx', DOCX_MIME, 'docx');
     } catch (err) {
       alert('Failed to download the Word document. Please try again.');
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleDownloadExcel = async () => {
+    if (filtered.length === 0) {
+      alert('There are no voters to download for this selection.');
+      return;
+    }
+    setDownloadingExcel(true);
+    try {
+      await downloadFromServer('/admin/voters/export-xlsx', XLSX_MIME, 'xlsx');
+    } catch (err) {
+      alert('Failed to download the Excel file. Please try again.');
+    } finally {
+      setDownloadingExcel(false);
     }
   };
 
@@ -127,6 +148,14 @@ export default function VoterManagement() {
             className="btn-secondary flex items-center gap-2 text-sm px-4 py-2.5 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors"
           >
             <Download className="w-4 h-4" /> Export CSV
+          </button>
+          <button
+            onClick={handleDownloadExcel}
+            disabled={downloadingExcel}
+            className="flex items-center gap-2 text-sm px-4 py-2.5 bg-green-600 text-white rounded-xl hover:bg-green-700 transition-colors disabled:opacity-60"
+          >
+            {downloadingExcel ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSpreadsheet className="w-4 h-4" />}
+            {downloadingExcel ? 'Preparing...' : 'Download Excel'}
           </button>
           <button
             onClick={handleDownloadWord}
