@@ -27,8 +27,10 @@ IMMEDIATE_ALERTS = {
     "token_role_mismatch": "Token role does not match database (possible forged token)",
     "login_blocked": "Login attempts blocked by lockout (possible brute force)",
     "election_deleted": "Election deleted",
+    "election_delete_blocked": "Attempt to delete an election that has votes",
     "candidate_deleted": "Candidate deleted",
     "integrity_mismatch": "Vote count integrity mismatch (possible database tampering)",
+    "voter_list_exported": "Voter list exported (personal data)",
 }
 
 # Alert when `count` events from one IP happen within `minutes`
@@ -47,6 +49,11 @@ _last_alert: dict[str, float] = {}
 
 
 def get_client_ip(request: Request) -> str:
+    # Render is fronted by Cloudflare, which sets CF-Connecting-IP to the real visitor IP
+    # (Cloudflare overwrites any value a client sends, so it cannot be spoofed).
+    cf_ip = request.headers.get("cf-connecting-ip")
+    if cf_ip:
+        return cf_ip.strip()
     xff = request.headers.get("x-forwarded-for")
     if xff:
         parts = [p.strip() for p in xff.split(",") if p.strip()]
