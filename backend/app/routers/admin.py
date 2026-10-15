@@ -12,6 +12,9 @@ from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -270,5 +273,136 @@ def export_voters_docx(
     return StreamingResponse(
         buf,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Voter list export (Excel)
+# ---------------------------------------------------------------------------
+
+# (column title, width in characters)
+EXCEL_COLUMNS = [
+    ("No.", 6),
+    ("Full Name", 28),
+    ("Admission No.", 18),
+    ("Course", 30),
+    ("Year", 7),
+    ("Constituency", 20),
+    ("Email", 32),
+    ("Phone", 16),
+    ("Voter ID", 18),
+    ("Status", 12),
+    ("Registered", 18),
+]
+
+
+def _voter_status(v) -> str:
+    if v.is_approved:
+        return "Approved"
+    if not v.is_active:
+        return "Rejected"
+    return "Pending"
+
+
+def _safe_sheet_title(name: str, used: set) -> str:
+    """Excel sheet names: max 31 chars, no []:*?/\\ and must be unique."""
+    base = re.sub(r"[\[\]\:\*\?\/\\]", " ", name or "Unknown").strip()[:31] or "Unknown"
+    title, i = base, 2
+    while title.lower() in used:
+        suffix = f" ({i})"
+        title = base[: 31 - len(suffix)] + suffix
+        i += 1
+    used.add(title.lower())
+    return title
+
+
+def _fill_voter_sheet(ws, voters):
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="2F5597")
+
+    ws.append([title for title, _ in EXCEL_COLUMNS])
+    for col_idx, (_, width) in enumerate(EXCEL_COLUMNS, start=1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    for n, v in enumerate(voters, start=1):
+        registered = v.created_at.strftime("%Y-%m-%d %H:%M") if v.created_at else ""
+        ws.append([
+            n,
+            v.full_name or "",
+            v.admission_number or "",
+            v.course or "",
+            v.year_of_study or "",
+            v.constituency or "",
+            v.email or "",
+            v.phone or "",
+            v.unique_voter_id or "",
+            _voter_status(v),
+            registered,
+        ])
+
+    # Students type their own details, so never let a value be treated as a formula
+    # (e.g. a name starting with "="). Force every text cell to plain string.
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
+
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+
+
+def _build_voters_xlsx(voters, constituency: Optional[str]) -> BytesIO:
+    wb = Workbook()
+    used: set = set()
+
+    ws_all = wb.active
+    ws_all.title = _safe_sheet_title("All Voters", used)
+    _fill_voter_sheet(ws_all, voters)
+
+    # When exporting several constituencies, add one sheet per constituency too
+    is_all = not constituency or constituency.strip().lower() == "all"
+    if is_all:
+        groups = [(name, list(items)) for name, items in groupby(voters, key=lambda v: v.constituency)]
+        if len(groups) > 1:
+            for name, items in groups:
+                ws = wb.create_sheet(_safe_sheet_title(name, used))
+                _fill_voter_sheet(ws, items)
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf
+
+
+@router.get("/voters/export-xlsx")
+def export_voters_xlsx(
+    request: Request,
+    constituency: Optional[str] = Query(None, max_length=100),
+    status: str = Query("all", pattern="^(all|pending|approved|rejected)$"),
+    db: Session = Depends(get_db),
+    admin: models.User = Depends(require_admin),
+):
+    voters = _query_voters(db, constituency, status)
+    if not voters:
+        raise HTTPException(status_code=404, detail="No voters match the selected filters")
+
+    buf = _build_voters_xlsx(voters, constituency)
+
+    log_event(
+        "voter_list_exported", "info", request, email=admin.email, user_id=admin.id,
+        detail=f"format=xlsx constituency={constituency or 'all'} status={status} count={len(voters)}",
+    )
+
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", constituency).strip("_") if constituency and constituency.lower() != "all" else "all"
+    filename = f"tucusa_voters_{slug}_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
